@@ -3,7 +3,7 @@
 <head>
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
-<title>Test 5</title>
+<title>Test 6</title>
 <link rel="stylesheet" href="https://unpkg.com/leaflet@1.9.4/dist/leaflet.css"/>
 <link rel="stylesheet" href="https://unpkg.com/leaflet-routing-machine@latest/dist/leaflet-routing-machine.css"/>
 <style>
@@ -1594,7 +1594,7 @@ async function adaptiveAIDashboard(latlng, heading) {
         const isMoving = currentSpeed > 5; // km/h threshold
 
         // Reroute Condition
-        if (offDist > 25 && isMoving && !route._isRerouting) {
+        if (offDist > 45 && isMoving && !route._isRerouting) {
 
             console.warn(`👉 Off-route detected (${offDist.toFixed(1)}m) — recalculating route...`);
 
@@ -1604,7 +1604,7 @@ async function adaptiveAIDashboard(latlng, heading) {
             triggerReroute(latlng, route);
 
             // Cooldown to avoid reroute loops
-            setTimeout(() => route._isRerouting = false, 9000);
+            setTimeout(() => route._isRerouting = false, 15000);
         }
     }
     // 🆕 Check for upcoming step announcements
@@ -1760,7 +1760,9 @@ async function safeReroute(route, currentLL) {
 
     // 2️⃣ Remove only the OLD line + step layers
     try { map.removeControl(route.rc); } catch {}
-    try { map.removeLayer(route.group); } catch {}
+    if (route.group) {
+      route.group.clearLayers(); // keep group alive
+    }
 
     // 3️⃣ Create NEW group for rerouted line
     const newGroup = L.layerGroup().addTo(map);
@@ -1927,7 +1929,10 @@ async function createRoute(start, end, color, marker = null, index = null) {
   header.querySelector("button").onclick = () => {
     try { speechSynthesis.cancel(); } catch {}
     try { map.removeControl(rc); } catch {}
-    try { map.removeLayer(group); } catch {}
+    if (route.group) { 
+      route.group.clearLayers();
+      map.removeLayer(route.group);
+    }
     if (marker) {
       const mIndex = waypointMarkers.indexOf(marker);
       if (mIndex !== -1) {
@@ -2124,8 +2129,9 @@ map.on("click", async e => {
     preview.start = startPoint;
 
 });
-
+  
 function rebuildRoutes() {
+  if (activeRouteIndex !== null) return; // 🔒 DO NOT touch active route  
   const driver = userMarker ? userMarker.getLatLng() : map.getCenter();
   const validWaypoints = [driver]; const validMarkers = [];
   waypointMarkers.forEach((m) => { if (map.hasLayer(m)) { validWaypoints.push(m.getLatLng()); validMarkers.push(m); } });

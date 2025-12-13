@@ -3,7 +3,7 @@
 <head>
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
-<title>arrow&distance</title>
+<title>0413test</title>
 <link rel="stylesheet" href="https://unpkg.com/leaflet@1.9.4/dist/leaflet.css"/>
 <link rel="stylesheet" href="https://unpkg.com/leaflet-routing-machine@latest/dist/leaflet-routing-machine.css"/>
 <style>
@@ -714,24 +714,10 @@ L.control.layers(
   { position: "bottomright", collapsed: true }
 ).addTo(map);
 
-const carIcon = L.divIcon({
-  className: "car-arrow-wrapper",
-  html: `
-    <svg id="user-car-svg" width="32" height="32" viewBox="0 0 100 100">
-      <polygon 
-        points="50,0 90,100 50,80 10,100"
-        fill="#1e90ff"
-        stroke="white"
-        stroke-width="6"
-      />
-    </svg>
-  `,
-  iconSize: [32, 32],
-  iconAnchor: [16, 16]
-});
+const carIcon=L.divIcon({className:"car-arrow-wrapper",html:`<svg id="user-car-svg" width="60" height="60" viewBox="0 0 100 100"><defs><filter id="softShadow" x="-50%" y="-50%" width="200%" height="200%"><feDropShadow dx="0" dy="3" stdDeviation="6" flood-color="rgba(0,0,0,0.35)"/></filter></defs><circle cx="50" cy="50" r="18" fill="#1a73e8" filter="url(#softShadow)"/><circle cx="50" cy="50" r="8" fill="#ffffff"/><path id="car-arrow" d="M50 4 L78 92 L50 78 L22 92 Z" fill="#1a73e8" stroke="#ffffff" stroke-width="5" filter="url(#softShadow)" style="display:none"/></svg>`,iconSize:[40,40],iconAnchor:[20,20]});
+
 
 const slidePanel = document.getElementById("slideRoutePanel");
-
 document.getElementById("routePanelBtn").onclick = () => {
   slidePanel.classList.toggle("show");
 };
@@ -987,6 +973,14 @@ approvalStartBtn.addEventListener("click", () => {
   createRoute(waypoints[waypoints.length - 2], endLL, colors[routes.length % colors.length], destMarker);
 });
 approvalCancelBtn.addEventListener("click", clearPreview);
+function checkDestinationReached(latlng, route) {
+    if (!route || !route.steps.length) return false;
+
+    const lastStep = route.steps[route.steps.length - 1];
+    const destLL = L.latLng(lastStep.lat, lastStep.lng);
+
+    return latlng.distanceTo(destLL) <= 25; // meters
+}
 
 // ===== Speed, road type, elevation =====
 function calculateGPSSpeed(latlng){
@@ -1111,6 +1105,15 @@ map.on("dragstart", () => {
 map.on("dragend zoomend rotateend", () => {
     lastUserInteraction = Date.now();
 });
+function rotateCarByHeading(heading) {
+    if (heading === null || isNaN(heading)) return;
+
+    const carSvg = document.getElementById("user-car-svg");
+    if (!carSvg) return;
+
+    carSvg.style.transform = `rotate(${heading}deg)`;
+}
+
 // Modify GPS watcher to detect permission denial
 if (navigator.geolocation){
   navigator.geolocation.watchPosition(async pos=>{
@@ -1120,24 +1123,30 @@ if (navigator.geolocation){
     const currentSpeed = calculateGPSSpeed(latlng);
     let heading = pos.coords.heading;
 
-    const MIN_SPEED_FOR_HEADING = 5/3.6;
-    if (heading == null || currentSpeed < MIN_SPEED_FOR_HEADING) {
-      heading = lastHeading || 0;
-    }
-    lastHeading = heading;
+    // Ignore heading when GPS is stationary (prevents random spins)
+    const MIN_SPEED_FOR_HEADING = 5 / 3.6;
 
+    if (heading !== null && !isNaN(heading) && currentSpeed >= MIN_SPEED_FOR_HEADING) {
+        lastHeading = heading;
+    }
+    const dot = document.getElementById("car-dot");
+    const arrow = document.getElementById("car-arrow");
+    if (dot && arrow) {
+        if (currentSpeed < 2) {   // km/h
+            dot.style.display = "block";
+            arrow.style.display = "none";
+        } else {
+            dot.style.display = "none";
+            arrow.style.display = "block";
+            rotateCarByHeading(lastHeading);
+        }
+    }
     if(!userMarker){
       userMarker = L.marker(latlng,{icon:carIcon}).addTo(map);
       map.setView(latlng, 19);
     } else {
       userMarker.setLatLng(latlng);
     }
-    const headingToUse = getEffectiveHeading(latlng);
-    const carSvg = document.getElementById("user-car-svg");
-    if (carSvg) {
-        carSvg.style.transform = `rotate(${headingToUse}deg)`;
-    }
-
 
     // 🆕 Only follow when follow mode is active
     // Only center if user did NOT interact manually
@@ -1359,30 +1368,6 @@ function getRemainingDistanceToNextStep(latlng, route, stepIndex) {
     const dist = latlng.distanceTo(stepLL);
 
     return Math.max(0, dist); // meters
-}
-function getEffectiveHeading(latlng) {
-    // 1️⃣ Use real GPS heading if available
-    if (lastHeading !== null && !isNaN(lastHeading)) {
-        return lastHeading;
-    }
-
-    // 2️⃣ Fallback: use route geometry
-    if (activeRouteIndex !== null && routes[activeRouteIndex]) {
-        const route = routes[activeRouteIndex];
-        if (route.steps[currentStepIndex + 1]) {
-            const cur = route.steps[currentStepIndex];
-            const next = route.steps[currentStepIndex + 1];
-
-            const angle = Math.atan2(
-                next.lng - cur.lng,
-                next.lat - cur.lat
-            ) * 180 / Math.PI;
-
-            return (angle + 360) % 360;
-        }
-    }
-
-    return 0;
 }
 
 // 🆕 SMART STEP ADVANCEMENT
@@ -1673,8 +1658,15 @@ async function adaptiveAIDashboard(latlng, heading) {
 
   if (activeRouteIndex !== null && routes.length > 0 && routes[activeRouteIndex]) {
     const route = routes[activeRouteIndex];
+    if (checkDestinationReached(latlng, route)) {
+        speak("Destination reached.", "step", { interrupt: true });
+        UI.aiBox.textContent = "Destination reached ✅";
+        cleanupRoute(route);
+        return;
+    }
     const steps = route.steps;
     const routeDisplayIndex = route.routeIndex;
+
 
     // 🆕 LOCATION-FIRST: Check if driver has jumped to a different step
     smartStepAdvancement(latlng);
@@ -2673,20 +2665,11 @@ async function getSearchResults(query) {
     // ---- Local / Global behavior ----
     const localResults = results.filter(r => r.distanceKm <= SEARCH_RADIUS_KM);
     const globalResults = results.filter(r => r.distanceKm > SEARCH_RADIUS_KM);
-
     let final;
-
-    if (isGlobalQuery && globalResults.length > 0) {
-        // Query clearly global → show exact foreign result first
-        final = [...globalResults, ...localResults];
-    } else if (localResults.length > 0) {
-        // Local intent → only nearby
-        final = localResults;
-    } else {
-        // Fallback if nothing local
-        final = results;
-    }
-
+    // ✅ ALWAYS show nearest first
+    final = results.sort(
+        (a, b) => a.distanceKm - b.distanceKm || b.score - a.score
+    );
     // ---- Final Sort ----
     final.sort((a, b) => b.score - a.score || a.distanceKm - b.distanceKm);
 

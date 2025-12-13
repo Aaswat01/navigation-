@@ -3,7 +3,7 @@
 <head>
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
-<title>Test 6</title>
+<title>arrow&distance</title>
 <link rel="stylesheet" href="https://unpkg.com/leaflet@1.9.4/dist/leaflet.css"/>
 <link rel="stylesheet" href="https://unpkg.com/leaflet-routing-machine@latest/dist/leaflet-routing-machine.css"/>
 <style>
@@ -197,10 +197,15 @@ align-items:center;color:#fff;font-size:0.9rem;}
     justify-content: center;
     align-items: center;
 }
-.user-car-svg {
+.car-arrow-wrapper {
+  transform-origin: center center;
+}
+#user-car-svg {
     transform-origin: center;
     transition: none !important;
     transform: none !important;
+    transform-origin: 50% 50%;
+    transition: transform 0.25s linear;
 }
 
 /* === Slide-up Approval Panel === */
@@ -545,7 +550,7 @@ align-items:center;color:#fff;font-size:0.9rem;}
   transform:translateX(-50%);
   width:94vw;
   max-width:480px;
-  background:rgba(0,0,0,0.90);
+  background:rgba(255, 0, 0, 0.9);
   border:1px solid rgba(255,255,255,0.15);
   border-radius:14px;
   padding:16px;
@@ -709,7 +714,22 @@ L.control.layers(
   { position: "bottomright", collapsed: true }
 ).addTo(map);
 
-const carIcon=L.icon({iconUrl:'https://cdn-icons-png.flaticon.com/512/3097/3097144.png',iconSize:[42,42]});
+const carIcon = L.divIcon({
+  className: "car-arrow-wrapper",
+  html: `
+    <svg id="user-car-svg" width="32" height="32" viewBox="0 0 100 100">
+      <polygon 
+        points="50,0 90,100 50,80 10,100"
+        fill="#1e90ff"
+        stroke="white"
+        stroke-width="6"
+      />
+    </svg>
+  `,
+  iconSize: [32, 32],
+  iconAnchor: [16, 16]
+});
+
 const slidePanel = document.getElementById("slideRoutePanel");
 
 document.getElementById("routePanelBtn").onclick = () => {
@@ -801,12 +821,6 @@ const SPEECH = {
   warningActiveUntil: 0,
   currentDisplay: { kind: "eco", text: "" },
 };
-function cleanLL(latlng) {
-    return {
-        lat: Number(latlng.lat.toFixed(6)),
-        lng: Number(latlng.lng.toFixed(6))
-    };
-}
 
 function nowMs() { return Date.now(); }
 
@@ -896,9 +910,7 @@ function buildPreviewRoute(startLL, endLL, labelText){
   // 3. Fetch Route Data in Background
   const router = L.Routing.osrmv1({ serviceUrl: 'https://router.project-osrm.org/route/v1' });
   const wp = [{ latLng: L.latLng(startLL) }, { latLng: L.latLng(endLL) }];
-  // CLEAN waypoints before routing
-  wp = wp.map(w => ({ latLng: L.latLng(cleanLL(w.latLng)) }));
-
+  
   router.route(wp, (err, routesResp) => {
     // If API fails, just stop here. The panel is already visible, so the user can still click Start.
     if (err || !routesResp || !routesResp[0]) { 
@@ -1120,6 +1132,12 @@ if (navigator.geolocation){
     } else {
       userMarker.setLatLng(latlng);
     }
+    const headingToUse = getEffectiveHeading(latlng);
+    const carSvg = document.getElementById("user-car-svg");
+    if (carSvg) {
+        carSvg.style.transform = `rotate(${headingToUse}deg)`;
+    }
+
 
     // 🆕 Only follow when follow mode is active
     // Only center if user did NOT interact manually
@@ -1331,6 +1349,41 @@ function findCurrentStepByLocation(latlng, route) {
   
   return closestStepIndex >= 0 ? { index: closestStepIndex, distance: closestDistance } : null;
 }
+function getRemainingDistanceToNextStep(latlng, route, stepIndex) {
+    if (!route.steps || stepIndex >= route.steps.length) return 0;
+
+    const step = route.steps[stepIndex];
+    const stepLL = L.latLng(step.lat, step.lng);
+
+    // Distance from current position to step point
+    const dist = latlng.distanceTo(stepLL);
+
+    return Math.max(0, dist); // meters
+}
+function getEffectiveHeading(latlng) {
+    // 1️⃣ Use real GPS heading if available
+    if (lastHeading !== null && !isNaN(lastHeading)) {
+        return lastHeading;
+    }
+
+    // 2️⃣ Fallback: use route geometry
+    if (activeRouteIndex !== null && routes[activeRouteIndex]) {
+        const route = routes[activeRouteIndex];
+        if (route.steps[currentStepIndex + 1]) {
+            const cur = route.steps[currentStepIndex];
+            const next = route.steps[currentStepIndex + 1];
+
+            const angle = Math.atan2(
+                next.lng - cur.lng,
+                next.lat - cur.lat
+            ) * 180 / Math.PI;
+
+            return (angle + 360) % 360;
+        }
+    }
+
+    return 0;
+}
 
 // 🆕 SMART STEP ADVANCEMENT
 // Handles skipping missed steps and announcing current location
@@ -1375,10 +1428,10 @@ function smartStepAdvancement(latlng) {
     // Mark current step as active and announce it
     updateStepUI(activeRouteIndex, currentStepIndex, 'active');
     const step = steps[currentStepIndex];
-    const distText = step.distance < 1000 
-      ? `${step.distance.toFixed(0)} meters` 
-      : `${(step.distance / 1000).toFixed(1)} kilometers`;
-    
+    const remaining = getRemainingDistanceToNextStep(latlng, route, currentStepIndex);
+    const distText = remaining < 1000
+      ? `${Math.round(remaining)} meters`
+      : `${(remaining / 1000).toFixed(1)} kilometers`;
     const announcement = `${step.text}. Proceed for ${distText}.`;
     speak(announcement, "step", { interrupt: true });
     announcedSteps.add(currentStepIndex);
@@ -1445,10 +1498,12 @@ function maybeRepeatCurrentStep() {
   const sinceLast = now - SPEECH.lastStepSpokenAt;
   
   if (sinceLast > repeatInterval) {
-    const distText =
-      step.distance < 1000
-        ? `${step.distance.toFixed(0)} meters`
-        : `${(step.distance / 1000).toFixed(1)} kilometers`;
+  const remaining = getRemainingDistanceToNextStep(userMarker.getLatLng(), route, currentStepIndex);
+  if (remaining < 15) return; // don't repeat if almost at next step
+  const distText =
+    remaining < 1000
+      ? `${Math.round(remaining)} meters`
+      : `${(remaining / 1000).toFixed(1)} kilometers`;
     const reminder = `Reminder: ${step.text}. Proceed for ${distText}.`;
     speak(reminder, "step", { interrupt: false });
   }
@@ -1554,6 +1609,45 @@ function distanceToSegment(p, a, b) {
     // Return distance in meters (approximate conversion)
     return L.latLng(x, y).distanceTo(L.latLng(xx, yy));
 }
+// ✅ Calculate remaining distance along route geometry (meters)
+function getRemainingRouteDistance(latlng, route) {
+    if (!route || !route.steps || route.steps.length < 2) return 0;
+
+    let remaining = 0;
+    let closestIndex = -1;
+    let closestDist = Infinity;
+
+    // Find closest segment on route
+    for (let i = currentStepIndex; i < route.steps.length - 1; i++) {
+        const p1 = L.latLng(route.steps[i].lat, route.steps[i].lng);
+        const p2 = L.latLng(route.steps[i + 1].lat, route.steps[i + 1].lng);
+
+        const d = distanceToSegment(latlng, p1, p2);
+        if (d < closestDist) {
+            closestDist = d;
+            closestIndex = i;
+        }
+    }
+
+    if (closestIndex === -1) return 0;
+
+    // Distance from car to end of that segment
+    const segEnd = L.latLng(
+        route.steps[closestIndex + 1].lat,
+        route.steps[closestIndex + 1].lng
+    );
+    remaining += latlng.distanceTo(segEnd);
+
+    // Add all remaining segments fully
+    for (let i = closestIndex + 1; i < route.steps.length - 1; i++) {
+        const a = L.latLng(route.steps[i].lat, route.steps[i].lng);
+        const b = L.latLng(route.steps[i + 1].lat, route.steps[i + 1].lng);
+        remaining += a.distanceTo(b);
+    }
+
+    return Math.max(0, remaining);
+}
+
 function triggerReroute(currentLL, route) {
     speak("Recalculating route.", "warning", { interrupt: true });
 
@@ -1594,7 +1688,7 @@ async function adaptiveAIDashboard(latlng, heading) {
         const isMoving = currentSpeed > 5; // km/h threshold
 
         // Reroute Condition
-        if (offDist > 45 && isMoving && !route._isRerouting) {
+        if (offDist > 25 && isMoving && !route._isRerouting) {
 
             console.warn(`👉 Off-route detected (${offDist.toFixed(1)}m) — recalculating route...`);
 
@@ -1604,7 +1698,7 @@ async function adaptiveAIDashboard(latlng, heading) {
             triggerReroute(latlng, route);
 
             // Cooldown to avoid reroute loops
-            setTimeout(() => route._isRerouting = false, 15000);
+            setTimeout(() => route._isRerouting = false, 9000);
         }
     }
     // 🆕 Check for upcoming step announcements
@@ -1612,22 +1706,16 @@ async function adaptiveAIDashboard(latlng, heading) {
 
     // Calculate remaining distance
     // 🔥 Live updating remaining route distance (GPS based)
+    // ✅ Correct remaining distance (monotonically decreases)
     if (route.steps && route.steps.length) {
-        let remainingDist = 0;
+        const remainingDist = getRemainingRouteDistance(latlng, route);
 
-        // distance from current location to start of active step
-        const curStep = steps[currentStepIndex];
-        const stepLL = L.latLng(curStep.lat, curStep.lng);
-        remainingDist += latlng.distanceTo(stepLL);
+        const km = remainingDist >= 1000
+            ? (remainingDist / 1000).toFixed(1)
+            : Math.round(remainingDist) + " m";
 
-        // total remaining steps
-        for (let i = currentStepIndex; i < steps.length; i++) {
-            remainingDist += steps[i].distance;
-        }
-
-        const km = (remainingDist / 1000).toFixed(1);
         const distanceEl = document.getElementById(`route-distance-${routeDisplayIndex}`);
-        if (distanceEl) distanceEl.textContent = `${km} km remaining`;
+        if (distanceEl) distanceEl.textContent = `${km} remaining`;
     }
   }
 
@@ -1760,9 +1848,7 @@ async function safeReroute(route, currentLL) {
 
     // 2️⃣ Remove only the OLD line + step layers
     try { map.removeControl(route.rc); } catch {}
-    if (route.group) {
-      route.group.clearLayers(); // keep group alive
-    }
+    try { map.removeLayer(route.group); } catch {}
 
     // 3️⃣ Create NEW group for rerouted line
     const newGroup = L.layerGroup().addTo(map);
@@ -1774,7 +1860,7 @@ async function safeReroute(route, currentLL) {
     });
 
     router.route(
-        [{ latLng: L.latLng(cleanLL(currentLL)) },{ latLng: L.latLng(cleanLL(destLL)) }],
+        [{ latLng: currentLL }, { latLng: destLL }],
         async (err, result) => {
             if (err || !result || !result[0]) {
                 console.warn("Rerouting failed", err);
@@ -1896,7 +1982,7 @@ async function createRoute(start, end, color, marker = null, index = null) {
   if (old) { try { map.removeControl(old.rc); } catch {} try { map.removeLayer(old.group); } catch {} }
 
   const rc = L.Routing.control({
-    waypoints: [L.latLng(cleanLL(start)),L.latLng(cleanLL(end))],
+    waypoints: [start, end],
     router: L.Routing.osrmv1({ serviceUrl: "https://router.project-osrm.org/route/v1" }),
     show: false, addWaypoints: false, createMarker: () => null,
     lineOptions: { styles: [{ color: routeColor, weight: 5, opacity: 0.9 }] }
@@ -1929,10 +2015,7 @@ async function createRoute(start, end, color, marker = null, index = null) {
   header.querySelector("button").onclick = () => {
     try { speechSynthesis.cancel(); } catch {}
     try { map.removeControl(rc); } catch {}
-    if (route.group) { 
-      route.group.clearLayers();
-      map.removeLayer(route.group);
-    }
+    try { map.removeLayer(group); } catch {}
     if (marker) {
       const mIndex = waypointMarkers.indexOf(marker);
       if (mIndex !== -1) {
@@ -2129,9 +2212,8 @@ map.on("click", async e => {
     preview.start = startPoint;
 
 });
-  
+
 function rebuildRoutes() {
-  if (activeRouteIndex !== null) return; // 🔒 DO NOT touch active route  
   const driver = userMarker ? userMarker.getLatLng() : map.getCenter();
   const validWaypoints = [driver]; const validMarkers = [];
   waypointMarkers.forEach((m) => { if (map.hasLayer(m)) { validWaypoints.push(m.getLatLng()); validMarkers.push(m); } });
@@ -2139,7 +2221,7 @@ function rebuildRoutes() {
   waypoints.push(...validWaypoints); waypointMarkers.push(...validMarkers);
   routes.forEach(r => { try { map.removeControl(r.rc); } catch {} try { map.removeLayer(r.group); } catch {} });
   routes = []; document.getElementById("routePanel").innerHTML = "";
-  if (waypoints.length < 2) return;
+  if (waypoints.length < 1) return;
   for (let i = 1; i < waypoints.length; i++) {
     createRoute(waypoints[i-1], waypoints[i], colors[(i-1)%colors.length], waypointMarkers[i-1], i-1);
   }

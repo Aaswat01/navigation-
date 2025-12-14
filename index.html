@@ -3,7 +3,7 @@
 <head>
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
-<title>againTest 5</title>
+<title>Test/test1</title>
 <link rel="stylesheet" href="https://unpkg.com/leaflet@1.9.4/dist/leaflet.css"/>
 <link rel="stylesheet" href="https://unpkg.com/leaflet-routing-machine@latest/dist/leaflet-routing-machine.css"/>
 <style>
@@ -801,12 +801,6 @@ const SPEECH = {
   warningActiveUntil: 0,
   currentDisplay: { kind: "eco", text: "" },
 };
-function cleanLL(latlng) {
-    return {
-        lat: Number(latlng.lat.toFixed(6)),
-        lng: Number(latlng.lng.toFixed(6))
-    };
-}
 
 function nowMs() { return Date.now(); }
 
@@ -896,9 +890,7 @@ function buildPreviewRoute(startLL, endLL, labelText){
   // 3. Fetch Route Data in Background
   const router = L.Routing.osrmv1({ serviceUrl: 'https://router.project-osrm.org/route/v1' });
   const wp = [{ latLng: L.latLng(startLL) }, { latLng: L.latLng(endLL) }];
-  // CLEAN waypoints before routing
-  wp = wp.map(w => ({ latLng: L.latLng(cleanLL(w.latLng)) }));
-
+  
   router.route(wp, (err, routesResp) => {
     // If API fails, just stop here. The panel is already visible, so the user can still click Start.
     if (err || !routesResp || !routesResp[0]) { 
@@ -1772,7 +1764,7 @@ async function safeReroute(route, currentLL) {
     });
 
     router.route(
-        [{ latLng: L.latLng(cleanLL(currentLL)) },{ latLng: L.latLng(cleanLL(destLL)) }],
+        [{ latLng: currentLL }, { latLng: destLL }],
         async (err, result) => {
             if (err || !result || !result[0]) {
                 console.warn("Rerouting failed", err);
@@ -1894,7 +1886,7 @@ async function createRoute(start, end, color, marker = null, index = null) {
   if (old) { try { map.removeControl(old.rc); } catch {} try { map.removeLayer(old.group); } catch {} }
 
   const rc = L.Routing.control({
-    waypoints: [L.latLng(cleanLL(start)),L.latLng(cleanLL(end))],
+    waypoints: [start, end],
     router: L.Routing.osrmv1({ serviceUrl: "https://router.project-osrm.org/route/v1" }),
     show: false, addWaypoints: false, createMarker: () => null,
     lineOptions: { styles: [{ color: routeColor, weight: 5, opacity: 0.9 }] }

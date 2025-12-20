@@ -3,7 +3,7 @@
 <head>
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
-<title>2-arrowfixing</title>
+<title>3-arrow</title>
 <link rel="stylesheet" href="https://unpkg.com/leaflet@1.9.4/dist/leaflet.css"/>
 <link rel="stylesheet" href="https://unpkg.com/leaflet-routing-machine@latest/dist/leaflet-routing-machine.css"/>
 <style>
@@ -2147,6 +2147,7 @@ function getArrowClassByAngle(angle) {
     // Thresholds for turn types
     return "gm-arrow-straight";                   // Straight
 }
+const STATIC_GM_ARROWS = [];
 
 // 5. Create Marker
 function createGMArrow(latlng, bearing, typeClass) {
@@ -2157,23 +2158,52 @@ function createGMArrow(latlng, bearing, typeClass) {
     const marker = L.marker(latlng, {
         interactive: false,
         icon: L.divIcon({
-            className: "",
+            className: "", // Empty class to avoid default styles
             html: arrowEl,
             iconSize: [24, 24],
             iconAnchor: [12, 12]
         })
     });
 
-    // store original road bearing
+    // 1. Store the fixed road bearing (0-360)
     marker._gmBaseBearing = bearing;
     marker._gmArrowEl = arrowEl;
 
-    // initial rotation (before any map rotation)
-    arrowEl.style.transform = `rotate(${bearing}deg)`;
+    // 2. Apply Initial Rotation (Road Angle - Current Map Angle)
+    const currentMapBearing = map.getBearing() || 0;
+    arrowEl.style.transform = `rotate(${bearing - currentMapBearing}deg)`;
 
     return marker;
+}// ===============================
+// ✅ FIXED: SYNC ARROWS WITH MAP ROTATION
+// ===============================
+function updateAllArrowRotations() {
+    const currentMapBearing = map.getBearing() || 0;
+
+    // Loop through all active routes
+    if (typeof routes !== 'undefined') {
+        routes.forEach(route => {
+            if (!route.roadArrows) return;
+            
+            // Update each arrow in the route
+            route.roadArrows.forEach(arrowObj => {
+                const marker = arrowObj.marker;
+                if (marker && marker._gmArrowEl) {
+                    // Calculate: Road Angle - Map Angle
+                    // This keeps the arrow "glued" to the road
+                    const visualAngle = marker._gmBaseBearing - currentMapBearing;
+                    marker._gmArrowEl.style.transform = `rotate(${visualAngle}deg)`;
+                }
+            });
+        });
+    }
 }
 
+// 🚀 Attach High-Performance Listeners
+// 'rotate' fires every frame during rotation
+map.on('rotate', updateAllArrowRotations); 
+map.on('rotateend', updateAllArrowRotations);
+map.on('move', updateAllArrowRotations); // Safety check during moves
 // ===== Route creation =====
 async function createRoute(start, end, color, marker = null, index = null) {
   const routeIndex = index !== null ? index : routes.length;
@@ -2417,6 +2447,18 @@ map.on("click", async e => {
 
     preview.start = startPoint;
 
+});
+map.on("rotate", () => {
+    const mapBearing = map.getBearing() || 0;
+
+    STATIC_GM_ARROWS.forEach(marker => {
+        if (!marker._gmArrowEl) return;
+
+        // cancel map rotation
+        const fixedRotation = marker._gmBaseBearing - mapBearing;
+        marker._gmArrowEl.style.transform =
+            `rotate(${fixedRotation}deg)`;
+    });
 });
 
 function rebuildRoutes() {

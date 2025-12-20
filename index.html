@@ -3,7 +3,7 @@
 <head>
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
-<title>Test1</title>
+<title>1-newline</title>
 <link rel="stylesheet" href="https://unpkg.com/leaflet@1.9.4/dist/leaflet.css"/>
 <link rel="stylesheet" href="https://unpkg.com/leaflet-routing-machine@latest/dist/leaflet-routing-machine.css"/>
 <style>
@@ -556,26 +556,7 @@ align-items:center;color:#fff;font-size:0.9rem;}
 .gm-arrow-straight {
   background-image: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 24 24' fill='%23000000'%3E%3Cpath d='M12 2L4.5 20.29l.71.71L12 18l6.79 3 .71-.71z'/%3E%3C/svg%3E");
 }
-/* Slight Left (Curve) */
-.gm-arrow-slight-left {
-  background-image: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 24 24' fill='%23000000'%3E%3Cpath d='M9 16.17L4.83 12l-1.42 1.41L9 19 21 7l-1.41-1.41z' transform='rotate(45 12 12)'/%3E%3C/svg%3E");
-}
-/* Slight Right (Curve) */
-.gm-arrow-slight-right {
-  background-image: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 24 24' fill='%23000000'%3E%3Cpath d='M9 16.17L4.83 12l-1.42 1.41L9 19 21 7l-1.41-1.41z' transform='rotate(-45 12 12)'/%3E%3C/svg%3E");
-}
-/* Sharp Left (Turn) */
-.gm-arrow-left {
-  background-image: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 24 24' fill='%23000000'%3E%3Cpath d='M14 7l-5 5 5 5V7z'/%3E%3C/svg%3E");
-}
-/* Sharp Right (Turn) */
-.gm-arrow-right {
-  background-image: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 24 24' fill='%23000000'%3E%3Cpath d='M10 17l5-5-5-5v10z'/%3E%3C/svg%3E");
-}
-/* U-Turn */
-.gm-arrow-uturn {
-  background-image: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 24 24' fill='%23000000'%3E%3Cpath d='M6 18c0 .55.45 1 1 1h1v3.5c0 .83.67 1.5 1.5 1.5s1.5-.67 1.5-1.5V6.41l1.29 1.29c.39.39 1.02.39 1.41 0s.39-1.02 0-1.41L9.71 2.29c-.39-.39-1.02-.39-1.41 0L4.29 6.29c-.39.39-.39 1.02 0 1.41s1.02.39 1.41 0L7 6.41V18H6z' transform='rotate(180 12 12)'/%3E%3C/svg%3E");
-}
+
 
 </style>
 </head>
@@ -812,6 +793,7 @@ let lastRerouteTime = 0;
 const REROUTE_COOLDOWN = 15000; // 15 seconds
 const requestQueue = [];
 let isProcessingQueue = false;
+let __searchSeq = 0;   // 🔒 hard cancel token
 
 async function safeFetch(url, retries = 2) {
     return new Promise((resolve, reject) => {
@@ -1010,14 +992,9 @@ function buildPreviewRoute(startLL, endLL, labelText){
     const r = routesResp[0];
     preview.osrmRoute = r;
     
-    // Draw the preview line (Blue Path)
-    preview.group = L.layerGroup().addTo(map);
-    preview.polyline = L.polyline(r.coordinates.map(c => [c.lat, c.lng]), { 
-        color:'#4DA6FF', 
-        weight:5, 
-        opacity:0.9 
-    }).addTo(preview.group);
-    
+    // preview line disabled — arrows only
+    preview.polyline = null;
+
     // Update labels with actual numbers once loaded
     approvalDistance.textContent = fmtKm(r.summary.totalDistance);
     approvalDuration.textContent = fmtMin(r.summary.totalTime);
@@ -1246,26 +1223,32 @@ if (navigator.geolocation){
   }, console.warn, { enableHighAccuracy:true, maximumAge:1000, timeout:5000 });
 }
 const compassBtn = document.getElementById("compass-btn");
-
 compassBtn.onclick = () => {
     compassMode = (compassMode + 1) % 2;
 
+    // MODE 0 → NORTH UP ONLY
     if (compassMode === 0) {
         autoRotation = false;
         follow = true;
         autoCenter = true;
-        map.setBearing(0, { animate: true });
-        compassBtn.style.background = "#ff1212";
+
+        map.setBearing(0, { animate: true, duration: 600 });
         compassBtn.innerHTML = "⬆️";
-    } else {
+        compassBtn.style.background = "#ff1212";
+    }
+
+    // MODE 1 → ROUTE-UP (NOT ICON-UP)
+    else {
         autoRotation = true;
         follow = true;
         autoCenter = true;
-        rotateTowardRoute();
-        compassBtn.style.background = "#00b36b";
+
+        rotateTowardRoute();   // 🔒 path-based ONLY
         compassBtn.innerHTML = "🧭";
+        compassBtn.style.background = "#00b36b";
     }
 };
+
 
 // keep map centered automatically if follow mode is ON
 setInterval(() => {
@@ -1273,22 +1256,40 @@ setInterval(() => {
         map.panTo(userMarker.getLatLng(), { animate: true });
     }
 }, 4000);
+
+// ===============================
+// FIXED: ROTATION LOGIC (Faces Path Upwards)
+// ===============================
 function rotateTowardRoute() {
+    if (!autoRotation) return;
     if (!routes.length || activeRouteIndex === null) return;
 
     const route = routes[activeRouteIndex];
-    if (!route.steps || !route.steps[currentStepIndex + 1]) return;
+    if (!route.steps || route.steps.length < 2) return;
 
-    const cur = route.steps[currentStepIndex];
-    const next = route.steps[currentStepIndex + 1];
+    let p1, p2;
 
-    // Compute angle
-    const angle = Math.atan2(
-        next.lng - cur.lng,
-        next.lat - cur.lat
-    ) * 180 / Math.PI;
+    // Normal case: current step → next step
+    if (route.steps[currentStepIndex + 1]) {
+        p1 = route.steps[currentStepIndex];
+        p2 = route.steps[currentStepIndex + 1];
+    }
+    // Final approach fallback
+    else if (currentStepIndex > 0) {
+        p1 = route.steps[currentStepIndex - 1];
+        p2 = route.steps[currentStepIndex];
+    } else {
+        return;
+    }
 
-    map.setBearing((angle + 360) % 360, { animate: true, duration: 800 });
+    const angle =
+        Math.atan2(p2.lng - p1.lng, p2.lat - p1.lat) * 180 / Math.PI;
+
+    // 🔒 ONLY route geometry controls bearing
+    map.setBearing((angle + 360) % 360, {
+        animate: true,
+        duration: 700
+    });
 }
 
 // === Speed Limit (Overpass API - Real Data Only) ===
@@ -1476,59 +1477,51 @@ function fadeOutStepLine(line, duration = 700) {
 // Handles skipping missed steps and announcing current location
 function smartStepAdvancement(latlng) {
   if (activeRouteIndex === null || !routes[activeRouteIndex]) return;
-  
   const route = routes[activeRouteIndex];
   const steps = route.steps;
-  
   // Find where driver actually is
   const locationResult = findCurrentStepByLocation(latlng, route);
-  
   if (locationResult && locationResult.index !== currentStepIndex) {
     // Driver has moved to a different step!
     const newStepIndex = locationResult.index;
-    
-    console.log(`🚗 Location jump detected: ${currentStepIndex} → ${newStepIndex}`);
-    
+    console.log(`🚗 Location jump detected: ${currentStepIndex} → ${newStepIndex}`);  
     // Mark all skipped steps as completed (hide them)
     for (let i = currentStepIndex; i < newStepIndex; i++) {
         updateStepUI(activeRouteIndex, i, 'completed');
-
         // 🔥 Smoothly erase completed step line instead of hard removal
         if (steps[i].lineLayer) {
             fadeOutStepLine(steps[i].lineLayer);
             steps[i].lineLayer = null; // prevent double removal
-        }
-        
+        }     
         if (steps[i].connectorLine) {
             fadeOutStepLine(steps[i].connectorLine, 400);
             steps[i].connectorLine = null;
         }
-    }
-
-    
+    }   
     // Update current step
     currentStepIndex = newStepIndex;
-    announcedSteps.clear(); // Reset announcements
-    
+    announcedSteps.clear(); // Reset announcements 
+    // 🔥 FORCE PATH TO FACE UP ON STEP CHANGE
+    if (autoRotation) {
+        requestAnimationFrame(() => rotateTowardRoute());
+    }
+
     // If this is the last step (destination)
     if (currentStepIndex >= steps.length - 1) {
       updateStepUI(activeRouteIndex, currentStepIndex, 'completed');
       speak("Destination reached.", "step", { interrupt: true });
-      UI.aiBox.textContent = "Destination reached ✅";
-      
+      UI.aiBox.textContent = "Destination reached ✅";    
       setTimeout(() => {
         cleanupRoute(route);
       }, 3000);
       return;
-    }
-    
+    } 
     // Mark current step as active and announce it
     updateStepUI(activeRouteIndex, currentStepIndex, 'active');
     const step = steps[currentStepIndex];
     const distText = step.distance < 1000 
       ? `${step.distance.toFixed(0)} meters` 
       : `${(step.distance / 1000).toFixed(1)} kilometers`;
-    
     const announcement = `${step.text}. Proceed for ${distText}.`;
     speak(announcement, "step", { interrupt: true });
     announcedSteps.add(currentStepIndex);
@@ -2149,23 +2142,36 @@ function getArrowClassByAngle(angle) {
     // Thresholds for turn types
     return "gm-arrow-straight";                   // Straight
 }
+const STATIC_GM_ARROWS = [];
 
 // 5. Create Marker
 function createGMArrow(latlng, bearing, typeClass) {
-    return L.marker(latlng, {
+    const arrowEl = document.createElement("div");
+    arrowEl.className = "gm-road-arrow";
+    arrowEl.innerHTML = `<div class="gm-arrow-icon ${typeClass}"></div>`;
+
+    const marker = L.marker(latlng, {
         interactive: false,
         icon: L.divIcon({
-            className: "", 
-            // We rotate the container by the road bearing
-            // The inner icon handles the specific turn shape
-            html: `<div class="gm-road-arrow" style="transform: rotate(${bearing}deg);">
-                     <div class="gm-arrow-icon ${typeClass}"></div>
-                   </div>`,
+            className: "",
+            html: arrowEl,
             iconSize: [24, 24],
             iconAnchor: [12, 12]
         })
     });
+
+    // store original road bearing
+    marker._gmBaseBearing = bearing;
+    marker._gmArrowEl = arrowEl;
+
+    STATIC_GM_ARROWS.push(marker);
+
+    // initial rotation (before any map rotation)
+    arrowEl.style.transform = `rotate(${bearing}deg)`;
+
+    return marker;
 }
+
 // ===== Route creation =====
 async function createRoute(start, end, color, marker = null, index = null) {
   const routeIndex = index !== null ? index : routes.length;
@@ -2181,7 +2187,8 @@ async function createRoute(start, end, color, marker = null, index = null) {
     waypoints: [start, end],
     router: OSRM_ROUTER,
     show: false, addWaypoints: false, createMarker: () => null,
-    lineOptions: { styles: [{ color: routeColor, weight: 5, opacity: 0.9 }] }
+    lineOptions: {
+      styles: []}
   }).addTo(map);
 
   const group = L.layerGroup().addTo(map);
@@ -2272,11 +2279,7 @@ rc.on("routesfound", async e => {
       const elev = elevs[idxStart] || 0;
 
       // 2. Draw the visual line for THIS step
-      const stepLine = L.polyline(segmentCoords, {
-        color: routeColor,
-        weight: 5,
-        opacity: 0.8
-      }).addTo(group);
+      const stepLine = null;
 
       // 3. Create the HTML Box
       const item = document.createElement("div");
@@ -2390,26 +2393,7 @@ rc.on("routesfound", async e => {
   });
 
 }
-map.on("rotate", () => {
-    // Get the current rotation of the map
-    const mapBearing = map.getBearing() || 0;
 
-    routes.forEach(route => {
-        if (!route.roadArrows) return;
-
-        route.roadArrows.forEach(a => {
-            // We rotate the DOM element inside the marker
-            const iconDiv = a.marker.getElement();
-            if (iconDiv) {
-                const innerArrow = iconDiv.querySelector(".gm-road-arrow");
-                if (innerArrow) {
-                    // Logic: Road Bearing - Map Bearing = Screen Rotation
-                    innerArrow.style.transform = `rotate(${a.baseBearing - mapBearing}deg)`;
-                }
-            }
-        });
-    });
-});
 map.on("click", async e => {
 
     if (!mapClickEnabled) return;
@@ -2428,6 +2412,18 @@ map.on("click", async e => {
 
     preview.start = startPoint;
 
+});
+map.on("rotate", () => {
+    const mapBearing = map.getBearing() || 0;
+
+    STATIC_GM_ARROWS.forEach(marker => {
+        if (!marker._gmArrowEl) return;
+
+        // cancel map rotation
+        const fixedRotation = marker._gmBaseBearing - mapBearing;
+        marker._gmArrowEl.style.transform =
+            `rotate(${fixedRotation}deg)`;
+    });
 });
 
 function rebuildRoutes() {
@@ -2762,7 +2758,18 @@ let lastSearchController = null;
 let __searchAbort = null;
 const __searchCache = new Map();
 
+function isStrongGlobalIntent(sim, distKm) {
+    // Very strong name match → allow far result
+    if (sim > 0.88 && distKm > 40) return true;
+
+    // City-level exact-ish match
+    if (sim > 0.92) return true;
+
+    return false;
+}
+
 async function getSearchResults(query) {
+    const seq = ++__searchSeq;   // 🔒 snapshot this request
     query = query.trim();
     if (!query) return [];
 
@@ -2955,8 +2962,13 @@ async function getSearchResults(query) {
         const distKm = haversine(center.lat, center.lng, r.lat, r.lon);
 
         let score = 0;
-        score += sim * 120;
-        score += Math.max(0, 40 - distKm); // distance boost
+        score += sim * 140;
+        // soft distance decay (not cutoff)
+        score += Math.max(0, 60 - Math.min(distKm, 60));
+        // intent override
+        if (isStrongGlobalIntent(sim, distKm)) {
+            score += 120;
+        }
         if (distKm < 2) score += 25;
         if (r.source === "photon") score += 10;
         if (r.source === "wiki") score += 5;
@@ -2964,8 +2976,25 @@ async function getSearchResults(query) {
         return { ...r, score, distKm };
     });
     // --------------------------- // NEAREST-FIRST HARD GATE // --------------------------- 
-    let local = scored.filter(r => r.distKm <= LOCAL_RADIUS_KM); 
-    // If nothing local → allow global fallback 
+    let local = scored.filter(r => r.distKm <= LOCAL_RADIUS_KM);
+
+    // 🔥 detect strong global intent anywhere
+    const allowGlobal = scored.some(r =>
+        isStrongGlobalIntent(
+            Math.max(
+                similarity(normalize(r.name), qNorm),
+                similarity(normalize(r.display_name), qNorm)
+            ),
+            r.distKm
+        )
+    );
+
+    // If intent is global → do NOT restrict by radius
+    if (allowGlobal) {
+        local = scored;
+    }
+
+    // fallback safety
     if (!local.length) local = scored;
 
     // ---------------------------
@@ -2987,6 +3016,10 @@ async function getSearchResults(query) {
     const out = final.slice(0, HARD_LIMIT);
 
     __searchCache.set(cacheKey, out);
+    // 🔒 If a newer search started or input was cleared → discard
+    if (seq !== __searchSeq || !input.value.trim()) {
+        return [];
+    }
     return out;
 }
 
@@ -3003,10 +3036,13 @@ input.oninput = () => {
   if (searchTimer) clearTimeout(searchTimer);
   
   // ✅ FIX: Explicitly clear pins if input is empty
-  if (!q) { 
-      suggestBox.style.display = "none"; 
-      clearSearchPins(); 
-      return; 
+  if (!q) {
+      __searchSeq++;              // 🔒 invalidate all pending searches
+      if (__searchAbort) __searchAbort.abort();
+      suggestBox.style.display = "none";
+      clearSearchPins();
+      results = [];
+      return;
   }
 
   searchTimer = setTimeout(async () => {

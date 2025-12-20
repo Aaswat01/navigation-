@@ -3,7 +3,7 @@
 <head>
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
-<title>3-arrow</title>
+<title>4-arrowinline</title>
 <link rel="stylesheet" href="https://unpkg.com/leaflet@1.9.4/dist/leaflet.css"/>
 <link rel="stylesheet" href="https://unpkg.com/leaflet-routing-machine@latest/dist/leaflet-routing-machine.css"/>
 <style>
@@ -529,33 +529,6 @@ align-items:center;color:#fff;font-size:0.9rem;}
   display: flex;
   align-items: center;
 }
-/* === GOOGLE MAPS STYLE SMART ARROWS === */
-.gm-road-arrow {
-  width: 24px;
-  height: 24px;
-  background: #ffffff;
-  border-radius: 50%;
-  display: flex;
-  align-items: center;
-  justify-content: center;
-  box-shadow: 0 2px 6px rgba(0,0,0,0.4);
-  transform-origin: center center;
-  z-index: 500;
-}
-
-.gm-arrow-icon {
-  width: 16px;
-  height: 16px;
-  background-repeat: no-repeat;
-  background-position: center;
-  background-size: contain;
-}
-
-/* --- SMART ARROW TYPES (SVGs) --- */
-/* Straight */
-.gm-arrow-straight {
-  background-image: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 24 24' fill='%23000000'%3E%3Cpath d='M12 2L4.5 20.29l.71.71L12 18l6.79 3 .71-.71z'/%3E%3C/svg%3E");
-}
 
 
 </style>
@@ -692,6 +665,7 @@ align-items:center;color:#fff;font-size:0.9rem;}
 </div>
 <script src="https://unpkg.com/leaflet@1.9.4/dist/leaflet-src.js"></script>
 <script src="leaflet-rotate-src.js"></script>
+<script src="leaflet.polylineDecorator.js"></script>
 <script src="https://unpkg.com/leaflet-routing-machine@latest/dist/leaflet-routing-machine.js"></script>
 <script>
 
@@ -794,6 +768,8 @@ const REROUTE_COOLDOWN = 15000; // 15 seconds
 const requestQueue = [];
 let isProcessingQueue = false;
 let __searchSeq = 0;   // 🔒 hard cancel token
+// 🔒 Track all arrow decorators for rotation cancel
+const STATIC_ROUTE_DECORATORS = [];
 
 async function safeFetch(url, retries = 2) {
     return new Promise((resolve, reject) => {
@@ -1498,6 +1474,11 @@ function smartStepAdvancement(latlng) {
             fadeOutStepLine(steps[i].lineLayer);
             steps[i].lineLayer = null; // prevent double removal
         }     
+        if (steps[i].arrowLayer) {
+            try { steps[i].arrowLayer.remove(); } catch {}
+            steps[i].arrowLayer = null;
+        }
+
         if (steps[i].connectorLine) {
             fadeOutStepLine(steps[i].connectorLine, 400);
             steps[i].connectorLine = null;
@@ -1710,42 +1691,6 @@ function triggerReroute(currentLL, route) {
 
     safeReroute(route, currentLL, destLL); 
 }
-function addGoogleStyleRoadArrows(coords, group) {
-    const arrows = [];
-
-    const SPACING = 30;        // meters between arrows
-    const ANGLE_TRIGGER = 5;   // detect slight curves
-
-    let lastPlaced = null;
-    let lastBearing = null;
-
-    for (let i = 1; i < coords.length - 1; i++) {
-        const p0 = L.latLng(coords[i - 1]);
-        const p1 = L.latLng(coords[i]);
-        const p2 = L.latLng(coords[i + 1]);
-
-        if (lastPlaced && p1.distanceTo(lastPlaced) < SPACING) continue;
-
-        const b1 = roadBearing(p0, p1);
-        const b2 = roadBearing(p1, p2);
-        const delta = normalizeAngle(b2 - b1);
-
-        if (lastBearing !== null && Math.abs(delta) < ANGLE_TRIGGER) continue;
-
-        const symbol = gmArrowByDelta(delta);
-        const arrow = createGMArrow(p1, symbol).addTo(group);
-
-        arrows.push({
-            marker: arrow,
-            baseBearing: b2
-        });
-
-        lastPlaced = p1;
-        lastBearing = b2;
-    }
-
-    return arrows;
-}
 
 // ===== Main AI loop =====
 async function adaptiveAIDashboard(latlng, heading) {
@@ -1939,6 +1884,20 @@ async function getEnglishName(lat, lon) {
   window._roadCache[key] = "Unnamed Road";
   return "Unnamed Road";
 }
+// ===============================
+// 🔒 LOCK ROUTE + ARROWS NORTH-UP
+// ===============================
+map.on("rotate", () => {
+    const bearing = map.getBearing() || 0;
+
+    STATIC_ROUTE_DECORATORS.forEach(decorator => {
+        if (!decorator || !decorator._path) return;
+
+        // Cancel map rotation on arrow SVG group
+        decorator._path.style.transformOrigin = "50% 50%";
+        decorator._path.style.transform = `rotate(${-bearing}deg)`;
+    });
+});
 
 // ======================================================
 // SAFE REROUTE ENGINE — preserves route box, index, color
@@ -2005,8 +1964,6 @@ async function safeReroute(route, currentLL) {
                 lat: c.lat,
                 lng: c.lng
             }));
-            // 🧭 rebuild Google-style road arrows after reroute
-            route.roadArrows = addGoogleStyleRoadArrows(coords, newGroup);
 
             // elevation
             const elevs = new Array(coords.length).fill(0);
@@ -2074,136 +2031,35 @@ function triggerReroute(currentLL, route) {
     safeReroute(route, currentLL);
 }
 // ===============================
-// GOOGLE MAPS STYLE ARROW ENGINE (SMART TURNS)
+// POLYLINE DECORATOR ARROWS (IMPROVED)
 // ===============================
+function addPolylineArrows(polyline, group) {
+    if (!polyline || !group) return null;
 
-// 1. Calculate bearing between two points
-function roadBearing(lat1, lng1, lat2, lng2) {
-    const y = Math.sin(lng2 - lng1) * Math.cos(lat2);
-    const x = Math.cos(lat1) * Math.sin(lat2) -
-              Math.sin(lat1) * Math.cos(lat2) * Math.cos(lng2 - lng1);
-    const brng = Math.atan2(y, x);
-    return (brng * 180 / Math.PI + 360) % 360; 
-}
-
-// 2. Normalize angle difference to -180 to +180
-function normalizeAngle(angle) {
-    while (angle <= -180) angle += 360;
-    while (angle > 180) angle -= 360;
-    return angle;
-}
-
-// 3. Main Arrow Engine
-function addGoogleStyleRoadArrows(coords, group) {
-    const arrows = [];
-    const ARROW_SPACING = 60; // Slightly closer for better turn visibility
-    let distAccumulator = ARROW_SPACING; 
-
-    // Helper to get radian coords
-    const toRad = (d) => d * Math.PI / 180;
-
-    for (let i = 0; i < coords.length - 1; i++) {
-        const p1 = L.latLng(coords[i]);
-        const p2 = L.latLng(coords[i+1]);
-        
-        const segmentDist = p1.distanceTo(p2);
-        distAccumulator += segmentDist;
-
-        if (distAccumulator >= ARROW_SPACING) {
-            
-            // A. Base Bearing (Current Segment)
-            const lat1 = toRad(p1.lat), lng1 = toRad(p1.lng);
-            const lat2 = toRad(p2.lat), lng2 = toRad(p2.lng);
-            const baseBearing = roadBearing(lat1, lng1, lat2, lng2);
-
-            // B. Look Ahead for Turns (Next Segment)
-            let turnAngle = 0;
-            if (i < coords.length - 2) {
-                const p3 = L.latLng(coords[i+2]);
-                const lat3 = toRad(p3.lat), lng3 = toRad(p3.lng);
-                const nextBearing = roadBearing(lat2, lng2, lat3, lng3);
-                turnAngle = normalizeAngle(nextBearing - baseBearing);
-            }
-
-            // C. Determine Icon based on Turn Angle  
-            const arrowClass = getArrowClassByAngle(turnAngle);
-
-            // D. Create Marker
-            const arrow = createGMArrow(p1, baseBearing, arrowClass).addTo(group);
-            
-            arrows.push({
-                marker: arrow,
-                baseBearing: baseBearing
-            });
-
-            distAccumulator = 0; 
-        }
-    }
-    return arrows;
-}
-
-// 4. Smart Icon Selector
-function getArrowClassByAngle(angle) {
-    // Thresholds for turn types
-    return "gm-arrow-straight";                   // Straight
-}
-const STATIC_GM_ARROWS = [];
-
-// 5. Create Marker
-function createGMArrow(latlng, bearing, typeClass) {
-    const arrowEl = document.createElement("div");
-    arrowEl.className = "gm-road-arrow";
-    arrowEl.innerHTML = `<div class="gm-arrow-icon ${typeClass}"></div>`;
-
-    const marker = L.marker(latlng, {
-        interactive: false,
-        icon: L.divIcon({
-            className: "", // Empty class to avoid default styles
-            html: arrowEl,
-            iconSize: [24, 24],
-            iconAnchor: [12, 12]
-        })
+    const decorator = L.polylineDecorator(polyline, {
+        patterns: [{
+            offset: 30,
+            repeat: 80,
+            symbol: L.Symbol.arrowHead({
+                pixelSize: 14,        // 🔥 cleaner & bolder
+                headAngle: 45,
+                polygon: false,       // Google-style open arrow
+                pathOptions: {
+                    stroke: true,
+                    color: "#ffffff",
+                    weight: 2.6,
+                    opacity: 0.95,
+                    lineCap: "round",
+                    lineJoin: "round"
+                }
+            })
+        }]
     });
 
-    // 1. Store the fixed road bearing (0-360)
-    marker._gmBaseBearing = bearing;
-    marker._gmArrowEl = arrowEl;
-
-    // 2. Apply Initial Rotation (Road Angle - Current Map Angle)
-    const currentMapBearing = map.getBearing() || 0;
-    arrowEl.style.transform = `rotate(${bearing - currentMapBearing}deg)`;
-
-    return marker;
-}// ===============================
-// ✅ FIXED: SYNC ARROWS WITH MAP ROTATION
-// ===============================
-function updateAllArrowRotations() {
-    const currentMapBearing = map.getBearing() || 0;
-
-    // Loop through all active routes
-    if (typeof routes !== 'undefined') {
-        routes.forEach(route => {
-            if (!route.roadArrows) return;
-            
-            // Update each arrow in the route
-            route.roadArrows.forEach(arrowObj => {
-                const marker = arrowObj.marker;
-                if (marker && marker._gmArrowEl) {
-                    // Calculate: Road Angle - Map Angle
-                    // This keeps the arrow "glued" to the road
-                    const visualAngle = marker._gmBaseBearing - currentMapBearing;
-                    marker._gmArrowEl.style.transform = `rotate(${visualAngle}deg)`;
-                }
-            });
-        });
-    }
+    decorator.addTo(group);
+    return decorator;
 }
 
-// 🚀 Attach High-Performance Listeners
-// 'rotate' fires every frame during rotation
-map.on('rotate', updateAllArrowRotations); 
-map.on('rotateend', updateAllArrowRotations);
-map.on('move', updateAllArrowRotations); // Safety check during moves
 // ===== Route creation =====
 async function createRoute(start, end, color, marker = null, index = null) {
   const routeIndex = index !== null ? index : routes.length;
@@ -2268,8 +2124,7 @@ async function createRoute(start, end, color, marker = null, index = null) {
     rebuildRoutes();
     refreshAIBox();
   };
-
-rc.on("routesfound", async e => {
+  rc.on("routesfound", async e => {
 
     if (!e.routes || !e.routes[0]) return;
 
@@ -2281,9 +2136,6 @@ rc.on("routesfound", async e => {
 
     // Prepare coordinate list
     const coords = r.coordinates.map(c => ({ lat: c.lat, lng: c.lng }));
-    // 🧭 ADD GOOGLE MAPS STYLE ROAD ARROWS (NO STEP DEPENDENCY)
-    const roadArrows = addGoogleStyleRoadArrows(coords, group);
-
     // Fetch elevations safely
     const elevs = new Array(coords.length).fill(0);
 
@@ -2313,9 +2165,11 @@ rc.on("routesfound", async e => {
       const stepLine = L.polyline(segmentCoords, {
         color: routeColor,
         weight: 5,
-        opacity: 0.8
+        opacity: 0.8,
+        dashArray: "8 6"
       }).addTo(group);
-
+      const stepArrow = addPolylineArrows(stepLine, group);
+      if (stepArrow) STATIC_ROUTE_DECORATORS.push(stepArrow);
       // 3. Create the HTML Box
       const item = document.createElement("div");
       item.className = "route-step";
@@ -2338,6 +2192,7 @@ rc.on("routesfound", async e => {
         element: item,
         distance: s.distance,
         lineLayer: stepLine,
+        arrowLayer: stepArrow,
         translated: false
       };
       steps.push(stepObj);
@@ -2447,18 +2302,6 @@ map.on("click", async e => {
 
     preview.start = startPoint;
 
-});
-map.on("rotate", () => {
-    const mapBearing = map.getBearing() || 0;
-
-    STATIC_GM_ARROWS.forEach(marker => {
-        if (!marker._gmArrowEl) return;
-
-        // cancel map rotation
-        const fixedRotation = marker._gmBaseBearing - mapBearing;
-        marker._gmArrowEl.style.transform =
-            `rotate(${fixedRotation}deg)`;
-    });
 });
 
 function rebuildRoutes() {

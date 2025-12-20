@@ -3,7 +3,7 @@
 <head>
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
-<title>1-newline</title>
+<title>2-arrowfixing</title>
 <link rel="stylesheet" href="https://unpkg.com/leaflet@1.9.4/dist/leaflet.css"/>
 <link rel="stylesheet" href="https://unpkg.com/leaflet-routing-machine@latest/dist/leaflet-routing-machine.css"/>
 <style>
@@ -992,9 +992,14 @@ function buildPreviewRoute(startLL, endLL, labelText){
     const r = routesResp[0];
     preview.osrmRoute = r;
     
-    // preview line disabled — arrows only
-    preview.polyline = null;
-
+    // Draw the preview line (Blue Path)
+    preview.group = L.layerGroup().addTo(map);
+    preview.polyline = L.polyline(r.coordinates.map(c => [c.lat, c.lng]), { 
+        color:'#4DA6FF', 
+        weight:5, 
+        opacity:0.9 
+    }).addTo(preview.group);
+    
     // Update labels with actual numbers once loaded
     approvalDistance.textContent = fmtKm(r.summary.totalDistance);
     approvalDuration.textContent = fmtMin(r.summary.totalTime);
@@ -2142,7 +2147,6 @@ function getArrowClassByAngle(angle) {
     // Thresholds for turn types
     return "gm-arrow-straight";                   // Straight
 }
-const STATIC_GM_ARROWS = [];
 
 // 5. Create Marker
 function createGMArrow(latlng, bearing, typeClass) {
@@ -2163,8 +2167,6 @@ function createGMArrow(latlng, bearing, typeClass) {
     // store original road bearing
     marker._gmBaseBearing = bearing;
     marker._gmArrowEl = arrowEl;
-
-    STATIC_GM_ARROWS.push(marker);
 
     // initial rotation (before any map rotation)
     arrowEl.style.transform = `rotate(${bearing}deg)`;
@@ -2187,8 +2189,7 @@ async function createRoute(start, end, color, marker = null, index = null) {
     waypoints: [start, end],
     router: OSRM_ROUTER,
     show: false, addWaypoints: false, createMarker: () => null,
-    lineOptions: {
-      styles: []}
+    lineOptions: { styles: [{ color: routeColor, weight: 5, opacity: 0.9 }] }
   }).addTo(map);
 
   const group = L.layerGroup().addTo(map);
@@ -2279,7 +2280,11 @@ rc.on("routesfound", async e => {
       const elev = elevs[idxStart] || 0;
 
       // 2. Draw the visual line for THIS step
-      const stepLine = null;
+      const stepLine = L.polyline(segmentCoords, {
+        color: routeColor,
+        weight: 5,
+        opacity: 0.8
+      }).addTo(group);
 
       // 3. Create the HTML Box
       const item = document.createElement("div");
@@ -2412,18 +2417,6 @@ map.on("click", async e => {
 
     preview.start = startPoint;
 
-});
-map.on("rotate", () => {
-    const mapBearing = map.getBearing() || 0;
-
-    STATIC_GM_ARROWS.forEach(marker => {
-        if (!marker._gmArrowEl) return;
-
-        // cancel map rotation
-        const fixedRotation = marker._gmBaseBearing - mapBearing;
-        marker._gmArrowEl.style.transform =
-            `rotate(${fixedRotation}deg)`;
-    });
 });
 
 function rebuildRoutes() {

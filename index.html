@@ -3,7 +3,7 @@
 <head>
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
-<title>6</title>
+<title>7-rotate</title>
 <link rel="stylesheet" href="https://unpkg.com/leaflet@1.9.4/dist/leaflet.css"/>
 <link rel="stylesheet" href="https://unpkg.com/leaflet-routing-machine@latest/dist/leaflet-routing-machine.css"/>
 <style>
@@ -1263,11 +1263,13 @@ compassBtn.onclick = () => {
     // MODE 1 → ROUTE-UP (NOT ICON-UP)
     else {
         autoRotation = true;
-        lockRouteNorthUp = false;  // ✅ ADD THIS
+        lockRouteNorthUp = false;
         follow = true;
         autoCenter = true;
 
-        rotateTowardRoute();   // 🔒 path-based ONLY
+        userHasTouchedMap = false; // 🔥 important
+        requestAnimationFrame(() => rotateTowardRoute());
+
         compassBtn.innerHTML = "🧭";
         compassBtn.style.background = "#00b36b";
     }
@@ -1896,7 +1898,8 @@ async function getEnglishName(lat, lon) {
 // 🔒 LOCK ROUTE + ARROWS NORTH-UP
 // ===============================
 map.on("rotate", () => {
-    if (lockRouteNorthUp !== true) return;
+    // ❌ Do NOT cancel rotation when auto route-up is active
+    if (lockRouteNorthUp !== true || autoRotation) return;
     const bearing = map.getBearing() || 0;
     STATIC_ROUTE_DECORATORS.forEach(decorator => {
         if (!decorator || !decorator._path) return;
@@ -2272,15 +2275,29 @@ async function createRoute(start, end, color, marker = null, index = null) {
       }
     }
 
-    // Update Route Object
+    const routeObj = { rc, group, steps, endKey, routeIndex, totalDistance: r.summary.totalDistance };
+
+    // 🔥 REGISTER ROUTE FIRST
     const existing = routes.find(x => x.routeIndex === routeIndex);
-    const routeObj = { rc, group, steps, endKey, routeIndex, totalDistance: r.summary.totalDistance, roadArrows};
-    
     if (existing) {
         Object.assign(existing, routeObj);
     } else {
         routes.push(routeObj);
     }
+
+    // 🔥 NOW activate route & rotate
+    if (activeRouteIndex === null) {
+        activeRouteIndex = routeIndex;
+        currentStepIndex = 0;
+        announcedSteps.clear();
+
+        autoRotation = true;
+        follow = true;
+        autoCenter = true;
+
+        setTimeout(() => rotateTowardRoute(), 600);
+    }
+
 
     document.getElementById(`route-distance-${routeIndex}`).textContent =
       `${(r.summary.totalDistance / 1000).toFixed(1)} km total`;

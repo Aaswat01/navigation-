@@ -1,43 +1,9 @@
-/**
- * ============================================================
- * LOCATION-FIRST NAVIGATION SYSTEM (CURRENT LOGIC OVERVIEW)
- * ============================================================
- *
- * Goal:
- * - Make the route polyline visually appear to go "upwards"
- *   by rotating the map based on route bearing (Google Maps style).
- *
- * Current Behavior:
- * - Map rotation is enabled and updated during navigation.
- * - Rotation works correctly at start and during some movements.
- * - However, rotation sometimes stops updating even though
- *   the driver continues moving along the route.
- *
- * Known Issues (Intentional – Under Investigation):
- * 1. Path bearing rotation is not consistently updated over time.
- *    Sometimes the map stops rotating even though the vehicle
- *    continues moving along the route line.
- *
- * 2. During auto re-routing:
- *    - The route polyline sometimes becomes invisible.
- *    - Direction arrows remain visible.
- *    - This indicates a layer / rendering lifecycle issue,
- *      not a routing failure.
- *
- * Re-routing itself is working correctly (steps, distance,
- * announcements, instructions), but visual path persistence
- * needs improvement.
- *
- * This file documents the CURRENT logic and limitations,
- * not the final optimized behavior.
- */
-
 <!DOCTYPE html>
 <html lang="en">
 <head>
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
-<title>1-reroute-pathbearing</title>
+<title>4-reroute-pathbearing</title>
 <link rel="stylesheet" href="https://unpkg.com/leaflet@1.9.4/dist/leaflet.css"/>
 <link rel="stylesheet" href="https://unpkg.com/leaflet-routing-machine@latest/dist/leaflet-routing-machine.css"/>
 <style>
@@ -1285,14 +1251,6 @@ if (navigator.geolocation){
     } else {
       userMarker.setLatLng(latlng);
     }
-    
-// 🔥 Rotation is triggered from GPS updates
-// Current behavior:
-// - Rotation depends on this call being executed.
-// - If GPS updates slow down or logic conditions fail,
-//   rotation will stop even though the driver is moving.
-// - This explains intermittent rotation failure.
-
     // 🔥 TRIGGER ROTATION UPDATE HERE
     if (autoRotation && activeRouteIndex !== null) {
         rotateTowardRoute();
@@ -1312,19 +1270,6 @@ if (navigator.geolocation){
     // ==============================
   }, console.warn, { enableHighAccuracy:true, maximumAge:1000, timeout:5000 });
 }
-// ======================================================
-// PATH BEARING CALCULATION (CURRENT APPROACH)
-// ======================================================
-//
-// Uses route geometry to determine direction
-// slightly ahead of the driver.
-//
-// Limitation:
-// - Bearing depends on step/path indices.
-// - If index tracking becomes stale,
-//   rotation will stop updating correctly.
-// - Google Maps instead uses continuous
-//   movement-based bearing.
 
 // ==========================================
 // 🚀 NEW: CALCULATE BEARING 10m AHEAD ON PATH
@@ -1373,29 +1318,6 @@ function getPathBearing(latlng, route) {
     const angle = Math.atan2(p2.lng - p1.lng, p2.lat - p1.lat) * 180 / Math.PI;
     return (angle + 360) % 360;
 }
-
-// ======================================================
-// ROUTE-UP MAP ROTATION (CURRENT IMPLEMENTATION)
-// ======================================================
-//
-// Purpose:
-// - Rotate the MAP (not the car icon) so that the route
-//   appears to go upward on screen.
-//
-// How it works:
-// - Finds a bearing along the route path slightly ahead
-//   of the driver's current position.
-// - Uses route geometry (coordinates + steps) instead of
-//   raw GPS heading to avoid noisy rotation.
-// - Calls map.setBearing() to rotate the entire map.
-//
-// Known Limitation:
-// - Rotation updates are not continuous.
-// - In long curves or during prolonged movement,
-//   rotation may stop updating.
-// - This is the root cause of the "sometimes works,
-//   sometimes not" behavior compared to Google Maps.
-
 // ===============================
 // ROUTE-UP ROTATION (EXTRACTED)
 // ===============================
@@ -2053,14 +1975,17 @@ async function safeReroute(route, currentLL) {
     speak("Recalculating route.", "warning", { interrupt: true });
 
     // 1️⃣ Get destination (last step)
+    if (!route || !route.steps?.length) return;
     const lastStep = route.steps[route.steps.length - 1];
     const destLL = L.latLng(lastStep.lat, lastStep.lng);
-    try { map.removeControl(route.rc); } catch {}
-    try { route.group.clearLayers();} catch {}
 
-    // 3️⃣ Create NEW group for rerouted line
+    // 🔒 KEEP OLD ROUTE REFERENCES (DO NOT REMOVE YET)
+    const oldGroup = route.group;
+    const oldRc = route.rc;
+    const oldMainLine = route.mainLine;
+
+    // 🆕 Create new group (do NOT assign to route yet)
     const newGroup = L.layerGroup().addTo(map);
-    route.group = newGroup; // replace only this route’s group
 
     // 4️⃣ Generate new route using OSRM
     OSRM_ROUTER.route(
@@ -2068,53 +1993,55 @@ async function safeReroute(route, currentLL) {
         async (err, result) => {
             if (err || !result || !result[0]) {
                 console.warn("Rerouting failed", err);
+                try { map.removeLayer(newGroup); } catch {}
                 return;
             }
+
             const r = result[0];
-// ===============================
-// 🔥 MAIN REROUTE POLYLINE DRAWING
-// ===============================
-//
-// Current behavior:
-// - A new polyline is drawn after rerouting.
-// - Sometimes the line is not visible on the map,
-//   while arrow decorators remain visible.
-//
-// Known Issue:
-// - This suggests the polyline layer is being
-//   cleared, hidden, or overridden unintentionally.
-// - Arrows use a separate decorator layer, so
-//   they remain visible even when the main path
-//   disappears.
-//
-// Re-routing logic itself is correct; the issue
-// is related to layer persistence / pane ordering.
 
             // ===============================
-            // 🔥 FIXED: MAIN REROUTE POLYLINE (ALWAYS VISIBLE)
+            // 🔥 MAIN REROUTE POLYLINE
             // ===============================
+            const coords = r.coordinates.map(c => ({
+                lat: c.lat,
+                lng: c.lng
+            }));
+
             const mainRouteLine = L.polyline(
-                r.coordinates.map(c => [c.lat, c.lng]),
+                coords.map(c => [c.lat, c.lng]),
                 {
-                    pane: "routePane",   // 🔑 CRITICAL
+                    pane: "routePane",
                     color: route.color,
-                    weight: 7,           // thicker
+                    weight: 7,
                     opacity: 1,
-                    dashArray: null,     // 🔑 NO DASH
+                    dashArray: null,
                     lineCap: "round",
                     lineJoin: "round"
                 }
             ).addTo(newGroup);
             MAIN_ROUTE_LINES.add(mainRouteLine);
 
-            // 🔒 store reference for cleanup (does NOT affect logic)
+            // ===============================
+            // ✅ SAFE SWAP (SIR'S FIX)
+            // ===============================
+            try { if (oldRc) map.removeControl(oldRc); } catch {}
+            try { if (oldGroup) map.removeLayer(oldGroup); } catch {}
+            if (oldMainLine) MAIN_ROUTE_LINES.delete(oldMainLine);
+
+            route.group = newGroup;
+            route.rc = null;
             route.mainLine = mainRouteLine;
-            // 🆕 Force recenter + zoom after reroute
+            route.coordinates = coords;     // 🔥 CRITICAL
+            route.lastClosestIndex = 0;
+
+            // 🆕 Force recenter + rotation
             setTimeout(() => forceRecenterToCar(19), 300);
             autoRotation = true;
             requestAnimationFrame(() => rotateTowardRoute());
 
-            // 6️⃣ Build steps again into SAME box
+            // ===============================
+            // 6️⃣ Rebuild steps UI + layers
+            // ===============================
             const content = document.querySelector(
                 `#route-box-${routeIndex} .route-content`
             );
@@ -2125,12 +2052,6 @@ async function safeReroute(route, currentLL) {
             content.innerHTML = "";
             route.steps = [];
 
-            const coords = r.coordinates.map(c => ({
-                lat: c.lat,
-                lng: c.lng
-            }));
-
-            // elevation
             const elevs = await getElevations(coords);
 
             r.instructions.forEach((s, i) => {
@@ -2147,12 +2068,13 @@ async function safeReroute(route, currentLL) {
                 const elev = elevs[idxStart] || 0;
 
                 const stepLine = L.polyline(seg, {
-                    pane: "overlayPane",   // 👈 keep steps lower
+                    pane: "overlayPane",
                     color: route.color,
                     weight: 4,
                     opacity: 0.6,
                     dashArray: "8 6"
                 }).addTo(newGroup);
+
                 const stepArrow = addPolylineArrows(stepLine, newGroup);
                 if (stepArrow) STATIC_ROUTE_DECORATORS.push(stepArrow);
 
@@ -2172,21 +2094,21 @@ async function safeReroute(route, currentLL) {
                     element: item,
                     distance: s.distance,
                     lineLayer: stepLine,
-                    arrowLayer: stepArrow,   // ✅ ADD
+                    arrowLayer: stepArrow,
                     translated: false
                 });
             });
 
-            // 7️⃣ Reset state only for this route
+            // 7️⃣ Reset state
             activeRouteIndex = routeIndex;
             currentStepIndex = 0;
             announcedSteps.clear();
 
-            // 8️⃣ Update distance display
+            // 8️⃣ Distance display
             distanceEl.textContent =
                 `${(r.summary.totalDistance / 1000).toFixed(1)} km remaining`;
 
-            // 9️⃣ Announce first step again
+            // 9️⃣ Announce first step
             if (route.steps[0]) {
                 speak(route.steps[0].text, "step", { interrupt: true });
             }
@@ -2200,19 +2122,6 @@ async function safeReroute(route, currentLL) {
 function triggerReroute(currentLL, route) {
     safeReroute(route, currentLL);
 }
-
-// ======================================================
-// DIRECTION ARROWS (POLYLINE DECORATOR)
-// ======================================================
-//
-// Important Note:
-// - Arrows are drawn using leaflet.polylineDecorator
-//   which renders independently from the base polyline.
-// - This is why arrows may remain visible even when
-//   the main route line disappears.
-// - Confirms the issue is NOT routing-related,
-//   but visual layer handling.
-
 // ===============================
 // POLYLINE DECORATOR ARROWS (IMPROVED)
 // ===============================
@@ -3295,24 +3204,3 @@ micBtn.onclick = async () => {
 </script>
 </body>
 </html>
-
-/**
- * ======================================================
- * SUMMARY OF CURRENT STATE
- * ======================================================
- *
- * ✔ Route creation works
- * ✔ Step detection works
- * ✔ Voice guidance works
- * ✔ Auto rerouting works
- *
- * ⚠ Path bearing rotation:
- *   - Works initially
- *   - Not fully continuous
- *
- * ⚠ Reroute visibility:
- *   - Arrows visible
- *   - Path line sometimes hidden
- *
- * These are known issues being actively tested.
- */

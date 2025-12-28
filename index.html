@@ -3,7 +3,7 @@
 <head>
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
-<title>testingnew22/12code</title>
+<title>reroutetest</title>
 <link rel="stylesheet" href="https://unpkg.com/leaflet@1.9.4/dist/leaflet.css"/>
 <link rel="stylesheet" href="https://unpkg.com/leaflet-routing-machine@latest/dist/leaflet-routing-machine.css"/>
 <style>
@@ -1727,7 +1727,11 @@ function distanceToSegment(p, a, b) {
     return L.latLng(x, y).distanceTo(L.latLng(xx, yy));
 }
 async function triggerReroute(route, currentLL) {
-
+    // 🛑 do not reroute finished routes
+    if (route.completed) {
+        console.log("Skip reroute — route already finished");
+        return;
+    }
     // 🚦 STOP: reroute already happening
     if (route._rerouting) return;
     route._rerouting = true;
@@ -1750,10 +1754,10 @@ async function triggerReroute(route, currentLL) {
         currentLL,
         destLL,
         color,
-        null,
-        routeIndex
+        null     // <<< always rebuild as NEW route
     );
-    activeRouteIndex = route.routeIndex;
+    // make NEW route active safely
+    activeRouteIndex = routes.length - 1;
     currentStepIndex = 0;
     announcedSteps.clear();
 

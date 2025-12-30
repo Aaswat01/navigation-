@@ -3,7 +3,7 @@
 <head>
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
-<title>test4</title>
+<title>test5</title>
 <link rel="stylesheet" href="https://unpkg.com/leaflet@1.9.4/dist/leaflet.css"/>
 <link rel="stylesheet" href="https://unpkg.com/leaflet-routing-machine@latest/dist/leaflet-routing-machine.css"/>
 <style>
@@ -774,7 +774,7 @@ let __searchSeq = 0;   // 🔒 hard cancel token
 // 🔒 Track all arrow decorators for rotation cancel
 const STATIC_ROUTE_DECORATORS = [];
 let lockRouteNorthUp = true;   // ⬅️ NEW
-
+let GLOBAL_REROUTING = false;
 
 async function safeFetch(url, retries = 2) {
     return new Promise((resolve, reject) => {
@@ -1726,18 +1726,14 @@ setInterval(autoRepeatSpeech, 40000);
 // 1. HELPER: Calculate distance from car to the route line (in meters)
 function getNearestRouteDistance(latlng, route) {
     if (!route || !route.steps || route.steps.length < 2) return 0;
-
     let minDistance = Infinity;
-
     // We only check the current step and the next 5 steps for performance
     // (checking the whole route every second is too heavy)
     const lookAhead = Math.min(currentStepIndex + 5, route.steps.length - 1);
     const startIndex = Math.max(0, currentStepIndex - 1);
-
     for (let i = startIndex; i < lookAhead; i++) {
         const p1 = L.latLng(route.steps[i].lat, route.steps[i].lng);
         const p2 = L.latLng(route.steps[i+1].lat, route.steps[i+1].lng);
-        
         // Project point onto line segment to get distance
         const dist = distanceToSegment(latlng, p1, p2);
         if (dist < minDistance) minDistance = dist;
@@ -1779,24 +1775,16 @@ function distanceToSegment(p, a, b) {
 // SIMPLE REROUTE — rebuild route from scratch
 // ======================================================
 async function triggerReroute(route, currentLL) {
-    // 🛑 CRITICAL: If route is done or already rerouting, KILL the process
-    if (route.completed || route._rerouting) return;
-    
-    route._rerouting = true;
+    if (GLOBAL_REROUTING) return;
+    GLOBAL_REROUTING = true;
     lastRerouteTime = Date.now();
-
     const lastStep = route.steps[route.steps.length - 1];
     const destLL = L.latLng(lastStep.lat, lastStep.lng);
     const routeIndex = route.routeIndex;
     const color = route.color || colors[routeIndex % colors.length];
-
     console.log(`Rerouting Route ${routeIndex}...`);
-
-    // Clear old visuals before building new ones
     try { map.removeLayer(route.group); } catch {}
     try { map.removeControl(route.rc); } catch {}
-
-    // ⭐ REPLACE ROUTE FULLY
     const newRoute = createRoute(
         currentLL,
         destLL,
@@ -1804,25 +1792,16 @@ async function triggerReroute(route, currentLL) {
         null,
         routeIndex
     );
-
-    // store new route in same index
     routes[routeIndex] = newRoute;
     activeRouteIndex = routeIndex;
-
     currentStepIndex = 0;
     announcedSteps.clear();
-
     speak("Recalculating route.", "step", { interrupt: true });
-
-    // keep auto rotation
     requestAnimationFrame(() => rotateTowardRoute());
-
     forceRecenterToCar(18);
-    
-    // Unlock rerouting after a delay
-    setTimeout(() => { 
-        route._rerouting = false; 
-    }, 5000);
+    setTimeout(() => {
+        GLOBAL_REROUTING = false;
+    }, 4500);
 }
 
 // ===== Main AI loop =====
@@ -3067,4 +3046,3 @@ micBtn.onclick = async () => {
 </script>
 </body>
 </html>
-

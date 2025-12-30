@@ -3,7 +3,7 @@
 <head>
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
-<title>test1</title>
+<title>test4</title>
 <link rel="stylesheet" href="https://unpkg.com/leaflet@1.9.4/dist/leaflet.css"/>
 <link rel="stylesheet" href="https://unpkg.com/leaflet-routing-machine@latest/dist/leaflet-routing-machine.css"/>
 <style>
@@ -1796,9 +1796,8 @@ async function triggerReroute(route, currentLL) {
     try { map.removeLayer(route.group); } catch {}
     try { map.removeControl(route.rc); } catch {}
 
-    // Rebuild the route
-    // Ensure createRoute correctly adds the new route.group to the map!
-    createRoute(
+    // ⭐ REPLACE ROUTE FULLY
+    const newRoute = createRoute(
         currentLL,
         destLL,
         color,
@@ -1806,10 +1805,17 @@ async function triggerReroute(route, currentLL) {
         routeIndex
     );
 
+    // store new route in same index
+    routes[routeIndex] = newRoute;
     activeRouteIndex = routeIndex;
-    currentStepIndex = 0; 
+
+    currentStepIndex = 0;
     announcedSteps.clear();
+
     speak("Recalculating route.", "step", { interrupt: true });
+
+    // keep auto rotation
+    requestAnimationFrame(() => rotateTowardRoute());
 
     forceRecenterToCar(18);
     
